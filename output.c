@@ -341,7 +341,7 @@ output_apply_config(struct cg_server *server, struct cg_output *output,
 		wlr_output_set_scale(wlr_output, config->scale);
 	}
 	if(config->pos.x == -2) {
-		if(output_set_mode(wlr_output, wlr_output->width, wlr_output->height,
+		if(output_set_mode(wlr_output, config->pos.width, config->pos.height,
 		                   config->refresh_rate) != 0) {
 			wlr_log(WLR_ERROR, "Setting output mode failed, disabling output.");
 			output_clear(output);
@@ -352,8 +352,22 @@ output_apply_config(struct cg_server *server, struct cg_output *output,
 		}
 		
 		if(wlr_box_empty(&output->layout_box)) {
+			int total_width = 0;
+			struct wlr_output_layout_output *l_output;
+			wl_list_for_each(l_output, &server->output_layout->outputs, link) {
+				if(l_output->output != wlr_output) {
+					struct wlr_box box;
+					wlr_output_layout_get_box(server->output_layout, 
+					                          l_output->output, &box);
+					if(box.x + box.width > total_width) {
+						total_width = box.x + box.width;
+					}
+				}
+			}
+			
 			struct wlr_output_layout_output *lo =
-				wlr_output_layout_add(server->output_layout, wlr_output, 0, 0);
+				wlr_output_layout_add(server->output_layout, wlr_output, 
+				                      total_width, 0);
 			wlr_scene_output_layout_add_output(server->scene_output_layout, lo,
 			                                  output->scene_output);
 		}
@@ -361,9 +375,6 @@ output_apply_config(struct cg_server *server, struct cg_output *output,
 		if(output->workspaces != NULL) {
 			wlr_output_layout_get_box(server->output_layout, output->wlr_output,
 			                          &output->layout_box);
-			
-			int screen_width = output->layout_box.width;
-			int x_pos = screen_width - config->pos.width;
 			
 			for(unsigned int i = 0; i < output->server->nws; ++i) {
 				workspace_free_tiles(output->workspaces[i]);
@@ -377,8 +388,8 @@ output_apply_config(struct cg_server *server, struct cg_output *output,
 				tile->workspace = output->workspaces[i];
 				tile->next = tile;
 				tile->prev = tile;
-				tile->tile.x = x_pos;
-				tile->tile.y = 0;
+				tile->tile.x = 0;  // Start at left edge of the output
+				tile->tile.y = 0;  // Top position
 				tile->tile.width = config->pos.width;
 				tile->tile.height = config->pos.height;
 				tile->id = server->tiles_curr_id++;
