@@ -341,7 +341,7 @@ output_apply_config(struct cg_server *server, struct cg_output *output,
 		wlr_output_set_scale(wlr_output, config->scale);
 	}
 	if(config->pos.x == -2) {
-		if(output_set_mode(wlr_output, config->pos.width, config->pos.height,
+		if(output_set_mode(wlr_output, wlr_output->width, wlr_output->height,
 		                   config->refresh_rate) != 0) {
 			wlr_log(WLR_ERROR, "Setting output mode failed, disabling output.");
 			output_clear(output);
@@ -351,46 +351,43 @@ output_apply_config(struct cg_server *server, struct cg_output *output,
 			return;
 		}
 		
-		int screen_width = wlr_output->width;
-		int x_pos = screen_width - config->pos.width;
-		
 		if(wlr_box_empty(&output->layout_box)) {
 			struct wlr_output_layout_output *lo =
-				wlr_output_layout_add(server->output_layout, wlr_output,
-				                     x_pos, 0);  // Top-right position
+				wlr_output_layout_add(server->output_layout, wlr_output, 0, 0);
 			wlr_scene_output_layout_add_output(server->scene_output_layout, lo,
 			                                  output->scene_output);
-		} else {
-			wlr_scene_output_set_position(output->scene_output, x_pos, 0);
 		}
 		
 		if(output->workspaces != NULL) {
 			wlr_output_layout_get_box(server->output_layout, output->wlr_output,
 			                          &output->layout_box);
-			/* Since the size of the output may have changed, we
-			 * reinitialize all workspaces with a fullscreen layout */
-			if(output->layout_box.width != prev_box.width ||
-			   output->layout_box.height != prev_box.height) {
-				for(unsigned int i = 0; i < output->server->nws; ++i) {
-					output_make_workspace_fullscreen(output, i);
+			
+			int screen_width = output->layout_box.width;
+			int x_pos = screen_width - config->pos.width;
+			
+			for(unsigned int i = 0; i < output->server->nws; ++i) {
+				workspace_free_tiles(output->workspaces[i]);
+				
+				struct cg_tile *tile = calloc(1, sizeof(struct cg_tile));
+				if(!tile) {
+					wlr_log(WLR_ERROR, "Failed to allocate memory for tile");
+					continue;
 				}
-			}
-			if(prev_box.x != output->layout_box.x ||
-			   prev_box.y != output->layout_box.y) {
-				for(unsigned int i = 0; i < server->nws; ++i) {
-					struct cg_workspace *ws = output->workspaces[i];
-					bool first = true;
-					for(struct cg_tile *tile = ws->focused_tile;
-					    first || output->workspaces[i]->focused_tile != tile;
-					    tile = tile->next) {
-						first = false;
-						if(tile->view != NULL) {
-							wlr_scene_node_set_position(
-							    &tile->view->scene_tree->node,
-							    tile->view->ox + output->layout_box.x,
-							    tile->view->oy + output->layout_box.y);
-						}
-					}
+				
+				tile->workspace = output->workspaces[i];
+				tile->next = tile;
+				tile->prev = tile;
+				tile->tile.x = x_pos;
+				tile->tile.y = 0;
+				tile->tile.width = config->pos.width;
+				tile->tile.height = config->pos.height;
+				tile->id = server->tiles_curr_id++;
+				
+				output->workspaces[i]->focused_tile = tile;
+				
+				struct cg_view *it_view;
+				wl_list_for_each(it_view, &output->workspaces[i]->views, link) {
+					view_maximize(it_view, tile);
 				}
 			}
 		}
