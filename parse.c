@@ -535,6 +535,8 @@ parse_output_config_keyword(char *key_str, enum output_status *status) {
 	}
 	if(strcmp(key_str, "pos") == 0) {
 		*status = OUTPUT_DEFAULT;
+	} else if(strcmp(key_str, "topright") == 0) {
+		*status = OUTPUT_DEFAULT;
 	} else if(strcmp(key_str, "prio") == 0) {
 		*status = OUTPUT_DEFAULT;
 	} else if(strcmp(key_str, "rotate") == 0) {
@@ -637,6 +639,55 @@ parse_output_config(char **saveptr, char **errstr) {
 	if(strcmp(key_str, "permanent") == 0) {
 		cfg->output_name = strdup(name);
 		cfg->role = OUTPUT_ROLE_PERMANENT;
+		return cfg;
+	}
+
+	if(strcmp(key_str, "topright") == 0) {
+		char *res_str = strtok_r(NULL, " ", saveptr);
+		if(res_str == NULL || strcmp(res_str, "res") != 0) {
+			*errstr = log_error(
+				"Expected keyword \"res\" in output configuration for output %s",
+				name);
+			goto error;
+		}
+		
+		cfg->pos.width = parse_uint(saveptr, "x");
+		if(cfg->pos.width <= 0) {
+			*errstr = log_error("Error parsing width of output configuration for "
+							  "output %s (hint: width must be larger than 0)",
+							  name);
+			goto error;
+		}
+		
+		cfg->pos.height = parse_uint(saveptr, " ");
+		if(cfg->pos.height <= 0) {
+			*errstr = log_error("Error parsing height of output configuration for "
+							  "output %s (hint: height must e larger than 0)",
+							  name);
+			goto error;
+		}
+		
+		cfg->pos.x = -2;  // Use -2 as a special flag for top-right
+		cfg->pos.y = 0;   // Top position
+		
+		char *rate_str = strtok_r(NULL, " ", saveptr);
+		if(rate_str == NULL || strcmp(rate_str, "rate") != 0) {
+			*errstr = log_error(
+				"Expected keyword \"rate\" in output configuration for output %s",
+				name);
+			goto error;
+		}
+		
+		cfg->refresh_rate = parse_float(saveptr, " ");
+		if(cfg->refresh_rate <= 0.0) {
+			*errstr =
+				log_error("Error parsing refresh rate of output configuration for "
+						  "output %s, expected positive float",
+						  name);
+			goto error;
+		}
+		
+		cfg->output_name = strdup(name);
 		return cfg;
 	}
 
