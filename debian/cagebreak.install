@@ -1,0 +1,6 @@
+etc/xdg/cagebreak/config
+usr/bin/cagebreak
+usr/share/licenses/cagebreak/LICENSE
+usr/share/man/man1/cagebreak.1
+usr/share/man/man5/cagebreak-config.5
+usr/share/man/man7/cagebreak-socket.7

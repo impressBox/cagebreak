@@ -1,0 +1,38 @@
+Source: cagebreak
+Section: x11
+Priority: optional
+Maintainer: Cagebreak Maintainers <impressboxdigitalsignage@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               meson (>= 0.53.0),
+               pkg-config,
+               libwayland-dev (>= 1.19.0),
+               wayland-protocols (>= 1.14),
+               libwlroots-dev (>= 0.17.0),
+               libxkbcommon-dev (>= 1.6.0),
+               libcairo2-dev (>= 1.18.0),
+               libpango1.0-dev (>= 1.51.0),
+               libfontconfig-dev (>= 2.15.0),
+               libinput-dev (>= 1.25.0),
+               libevdev-dev (>= 1.13.1),
+               libudev-dev (>= 255),
+               scdoc
+Standards-Version: 4.6.2
+Homepage: https://github.com/impressBox/cagebreak
+Vcs-Browser: https://github.com/impressBox/cagebreak
+Vcs-Git: https://github.com/impressBox/cagebreak.git
+Rules-Requires-Root: no
+
+Package: cagebreak
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Tiling Wayland compositor inspired by ratpoison
+ Cagebreak is a tiling Wayland compositor inspired by the X11 window
+ manager ratpoison. It provides a keyboard-centric window management
+ experience where screen space is divided into non-overlapping tiles.
+ .
+ Features include:
+  * Keyboard-driven window management
+  * Tiling layout system
+  * XWayland support
+  * Configurable through a configuration file
+  * IPC socket for external control
