@@ -64,6 +64,8 @@ view_unmap(struct cg_view *view);
 void
 view_maximize(struct cg_view *view, struct cg_tile *tile);
 void
+view_maximize_extended(struct cg_view *view, struct cg_tile *tile);
+void
 view_map(struct cg_view *view, struct wlr_surface *surface,
          struct cg_workspace *ws);
 void

@@ -24,7 +24,12 @@ workspace_tile_update_view(struct cg_tile *tile, struct cg_view *view) {
 	}
 	tile->view = view;
 	if(view != NULL) {
-		view_maximize(view, tile);
+		// Call appropriate maximize function based on mode
+		if(view->workspace->output->server->extended_mode) {
+			view_maximize_extended(view, tile);
+		} else {
+			view_maximize(view, tile);
+		}
 		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
 	}
 }
@@ -119,9 +124,19 @@ workspace_focus(struct cg_output *outp, int ws) {
 		        ws, outp->server->nws);
 		return;
 	}
-	wlr_scene_node_place_above(
-	    &outp->bg->node, &outp->workspaces[outp->curr_workspace]->scene->node);
-	wlr_scene_node_place_above(&outp->workspaces[ws]->scene->node,
-	                           &outp->bg->node);
+	
+	// Normal mode: manage workspace z-ordering relative to background
+	if(!outp->server->extended_mode) {
+		wlr_scene_node_place_above(
+		    &outp->bg->node, &outp->workspaces[outp->curr_workspace]->scene->node);
+		wlr_scene_node_place_above(&outp->workspaces[ws]->scene->node,
+		                           &outp->bg->node);
+	}
+	
 	outp->curr_workspace = ws;
+
+	// Extended mode: ensure wall scene is on top
+	if(outp->server->extended_mode && outp->server->extended_wall_scene) {
+		wlr_scene_node_raise_to_top(&outp->server->extended_wall_scene->node);
+	}
 }

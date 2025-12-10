@@ -9,6 +9,7 @@
 #include <getopt.h>
 #include <pango.h>
 #include <pango/pangocairo.h>
+#include <ctype.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -217,6 +218,23 @@ set_configuration(struct cg_server *server,
 		}
 		line[strcspn(line, "\n")] = '\0';
 		if(*line != '\0' && *line != '#') {
+			// Skip output commands in extended mode to prevent conflicts
+			if(server->extended_mode) {
+				// Check if line starts with "output" command
+				char *line_copy = strdup(line);
+				if(line_copy != NULL) {
+					char *first_token = strtok(line_copy, " \t");
+					if(first_token != NULL && strcmp(first_token, "output") == 0) {
+						wlr_log(WLR_DEBUG, "EXTENDED: Skipping output command (line %d): %s", 
+						        line_num, line);
+						free(line_copy);
+						memset(line, 0, line_length * sizeof(char));
+						continue; // Skip this line
+					}
+					free(line_copy);
+				}
+			}
+			
 			char *errstr;
 			if(parse_rc_line(server, line, &errstr) != 0) {
 				wlr_log(WLR_ERROR, "Error in config file \"%s\", line %d\n",
@@ -234,6 +252,49 @@ set_configuration(struct cg_server *server,
 	free(line);
 	fclose(config_file);
 	return 0;
+}
+
+void
+print_extended_mode_info(void) {
+	wlr_log(WLR_INFO, "\n");
+	wlr_log(WLR_INFO, "═══════════════════════════════════════════════════════════");
+	wlr_log(WLR_INFO, "  EXTENDED MODE ENABLED - FILTERED CONFIG COMMANDS");
+	wlr_log(WLR_INFO, "═══════════════════════════════════════════════════════════");
+	wlr_log(WLR_INFO, "");
+	wlr_log(WLR_INFO, "The following OUTPUT commands are filtered/ignored:");
+	wlr_log(WLR_INFO, "");
+	wlr_log(WLR_INFO, "  • output <name> pos <x> <y> res <width>x<height> rate <rate>");
+	wlr_log(WLR_INFO, "  • output <name> rotate <n>");
+	wlr_log(WLR_INFO, "  • output <name> topright res <width>x<height> rate <rate>");
+	wlr_log(WLR_INFO, "  • output <name> enable");
+	wlr_log(WLR_INFO, "  • output <name> disable");
+	wlr_log(WLR_INFO, "  • output <name> scale <scale>");
+	wlr_log(WLR_INFO, "  • output <name> prio <n>");
+	wlr_log(WLR_INFO, "  • output <name> permanent");
+	wlr_log(WLR_INFO, "  • output <name> peripheral");
+	wlr_log(WLR_INFO, "");
+	wlr_log(WLR_INFO, "Reason: Output positioning and layout are managed by extended mode.");
+	wlr_log(WLR_INFO, "  • Only HDMI-A-1 and HDMI-A-2 outputs are used");
+	const char *display_mode = getenv("IMPRESSBOX_DISPLAY_MODE");
+	char mode = 'D';
+
+	if(display_mode != NULL && strlen(display_mode) > 0) {
+		mode = toupper(display_mode[0]);
+		if(mode != 'V' && mode != 'H' && mode != 'D') {
+			mode = 'D';
+		}
+	}
+
+	if(mode == 'H') {
+		wlr_log(WLR_INFO, "  • Layout: Horizontal (left/right)");
+	} else if(mode == 'V') {
+		wlr_log(WLR_INFO, "  • Layout: Vertical (top/bottom)");
+	} else {
+		wlr_log(WLR_INFO, "  • Layout: Vertical (top/bottom)");
+	}
+	wlr_log(WLR_INFO, "");
+	wlr_log(WLR_INFO, "═══════════════════════════════════════════════════════════");
+	wlr_log(WLR_INFO, "");
 }
 
 char *
@@ -407,7 +468,7 @@ main(int argc, char *argv[]) {
 
 	wlr_renderer_init_wl_display(server.renderer, server.wl_display);
 
-	server.bg_color = (float[4]){0, 0, 0, 1};
+	server.bg_color = (float[4]){0.1, 0.1, 0.1, 1};
 	wl_list_init(&server.outputs);
 	wl_list_init(&server.disabled_outputs);
 
@@ -644,6 +705,33 @@ main(int argc, char *argv[]) {
 		exit(0);
 	}
 
+	const char *display_mode = getenv("IMPRESSBOX_DISPLAY_MODE");
+	char mode = 'D';  // Default
+
+	if(display_mode != NULL && strlen(display_mode) > 0) {
+		mode = toupper(display_mode[0]);  // Get first character, uppercase
+		// Validate: only V, H, or D are valid
+		if(mode != 'V' && mode != 'H' && mode != 'D') {
+			mode = 'D';  // Invalid value, default to D
+		}
+	}
+
+	if(mode == 'V') {
+		server.extended_mode = true;
+		server.extended_horizontal = false;  // Vertical = top/bottom
+	} else if(mode == 'H') {
+		server.extended_mode = true;
+		server.extended_horizontal = true;   // Horizontal = left/right
+	} else {
+		server.extended_mode = false;        // D or invalid = normal mode
+		server.extended_horizontal = false;
+	}
+
+	if(server.extended_mode) {
+		print_extended_mode_info();
+	}
+
+	/* Load config file even in extended mode, but skip output initialization */
 	{ // config_file should only be visible as long as it is valid
 		int conf_ret = 1;
 		char *config_file = get_config_file(config_path);
@@ -670,23 +758,28 @@ main(int argc, char *argv[]) {
 		}
 	}
 
-	{
-		struct wl_list tmp_list;
-		wl_list_init(&tmp_list);
-		wl_list_insert_list(&tmp_list, &server.outputs);
-		wl_list_init(&server.outputs);
-		struct cg_output *output, *output_tmp;
-		wl_list_for_each_safe(output, output_tmp, &tmp_list, link) {
-			wl_list_remove(&output->link);
-			output_insert(&server, output);
-			output_configure(&server, output);
+	/* Skip normal initialization in test-impress mode */
+	if(!server.extended_mode) {
+		{
+			struct wl_list tmp_list;
+			wl_list_init(&tmp_list);
+			wl_list_insert_list(&tmp_list, &server.outputs);
+			wl_list_init(&server.outputs);
+			struct cg_output *output, *output_tmp;
+			wl_list_for_each_safe(output, output_tmp, &tmp_list, link) {
+				wl_list_remove(&output->link);
+				output_insert(&server, output);
+				output_configure(&server, output);
+			}
+			server.curr_output =
+			    wl_container_of(server.outputs.next, server.curr_output, link);
 		}
-		server.curr_output =
-		    wl_container_of(server.outputs.next, server.curr_output, link);
-	}
 
-	/* Place the cursor to the top left of the output layout. */
-	wlr_cursor_warp(server.seat->cursor, NULL, 0, 0);
+		/* Place the cursor to the top left of the output layout. */
+		wlr_cursor_warp(server.seat->cursor, NULL, 0, 0);
+	} else {
+		wlr_log(WLR_INFO, "Running in test-impress mode - waiting for HDMA1 and HDMA2 outputs");
+	}
 
 	wl_display_run(server.wl_display);
 

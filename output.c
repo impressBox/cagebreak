@@ -6,7 +6,11 @@
 #include "config.h"
 #include <wlr/config.h>
 
+#include <ctype.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
@@ -225,6 +229,62 @@ handle_output_frame(struct wl_listener *listener, void *data) {
 	struct timespec now = {0};
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	wlr_scene_output_send_frame_done(scene_output, &now);
+}
+
+// Parse resolution string in format "WIDTHxHEIGHT" (e.g., "1280x720")
+// Returns 0 on success, -1 on failure
+static int
+parse_resolution(const char *str, int *width, int *height) {
+	if (!str || !width || !height) {
+		return -1;
+	}
+
+	// Skip leading whitespace
+	while (*str && isspace(*str)) {
+		str++;
+	}
+
+	char *endptr;
+	long w = strtol(str, &endptr, 10);
+	if (endptr == str || w <= 0 || w > 7680) {
+		return -1;  // Invalid width
+	}
+
+	// Skip to 'x' or 'X'
+	while (*endptr && *endptr != 'x' && *endptr != 'X') {
+		if (!isspace(*endptr)) {
+			return -1;  // Expected 'x' separator
+		}
+		endptr++;
+	}
+
+	if (*endptr == '\0') {
+		return -1;  // No 'x' found
+	}
+
+	endptr++;  // Skip 'x'
+
+	// Skip whitespace after 'x'
+	while (*endptr && isspace(*endptr)) {
+		endptr++;
+	}
+
+	long h = strtol(endptr, &endptr, 10);
+	if (endptr == str || h <= 0 || h > 4320) {
+		return -1;  // Invalid height
+	}
+
+	// Check for trailing garbage
+	while (*endptr) {
+		if (!isspace(*endptr)) {
+			return -1;  // Trailing garbage
+		}
+		endptr++;
+	}
+
+	*width = (int)w;
+	*height = (int)h;
+	return 0;
 }
 
 static int
@@ -677,6 +737,321 @@ handle_new_output(struct wl_listener *listener, void *data) {
 	                           server->renderer)) {
 		wlr_log(WLR_ERROR, "Failed to initialize output rendering");
 		return;
+	}
+
+	const char *display_mode = getenv("IMPRESSBOX_DISPLAY_MODE");
+	char mode = 'D';  // Default
+
+	if(display_mode != NULL && strlen(display_mode) > 0) {
+		mode = toupper(display_mode[0]);
+		// Validate: only V, H, or D are valid
+		if(mode != 'V' && mode != 'H' && mode != 'D') {
+			mode = 'D';  // Invalid value, default to D
+		}
+	}
+
+	if(mode == 'V') {
+		server->extended_mode = true;
+		server->extended_horizontal = false;
+	} else if(mode == 'H') {
+		server->extended_mode = true;
+		server->extended_horizontal = true;
+	} else {
+		server->extended_mode = false;
+		server->extended_horizontal = false;
+	}
+
+	if (server->extended_mode) {
+		const char *name = wlr_output->name;
+		wlr_log(WLR_DEBUG, "EXTENDED MODE ACTIVE for output %s", name);
+	
+		bool is_hdma1 = strcasecmp(name, "HDMA1") == 0 ||
+						strcasecmp(name, "HDMI-A-1") == 0;
+		bool is_hdma2 = strcasecmp(name, "HDMA2") == 0 ||
+						strcasecmp(name, "HDMI-A-2") == 0;
+	
+		if (!is_hdma1 && !is_hdma2) {
+			wlr_log(WLR_DEBUG, "EXTENDED: ignoring non-wall output %s", name);
+			wlr_output_enable(wlr_output, false);
+			wlr_output_commit(wlr_output);
+			return;
+		}
+	
+		// Parse environment variables for resolutions and refresh rate
+		// Only parse once (on first output)
+		static bool resolution_parsed = false;
+		if (!resolution_parsed) {
+			// Parse refresh rate (default 60.0)
+			const char *hz_str = getenv("IMPRESSBOX_DM_HZ");
+			if (hz_str) {
+				char *endptr;
+				float hz = strtof(hz_str, &endptr);
+				if (endptr != hz_str && hz > 0.0f && hz <= 240.0f) {
+					server->extended_resolution.refresh_rate = hz;
+				} else {
+					wlr_log(WLR_ERROR, "EXTENDED: Invalid IMPRESSBOX_DM_HZ value '%s', using default 60.0", hz_str);
+					server->extended_resolution.refresh_rate = 60.0f;
+				}
+			} else {
+				server->extended_resolution.refresh_rate = 60.0f;
+			}
+
+			// Parse HDMI1 resolution
+			const char *hdmi1_str = getenv("IMPRESSBOX_DM_HDMI1");
+			if (hdmi1_str) {
+				if (parse_resolution(hdmi1_str, &server->extended_resolution.hdmi1_width,
+				                     &server->extended_resolution.hdmi1_height) == 0) {
+					server->extended_resolution.hdmi1_configured = true;
+					wlr_log(WLR_INFO, "EXTENDED: HDMI1 resolution set to %dx%d",
+					        server->extended_resolution.hdmi1_width,
+					        server->extended_resolution.hdmi1_height);
+				} else {
+					wlr_log(WLR_ERROR, "EXTENDED: Invalid IMPRESSBOX_DM_HDMI1 format '%s', will use preferred mode", hdmi1_str);
+					server->extended_resolution.hdmi1_configured = false;
+				}
+			} else {
+				server->extended_resolution.hdmi1_configured = false;
+				wlr_log(WLR_INFO, "EXTENDED: IMPRESSBOX_DM_HDMI1 not set, will use preferred mode");
+			}
+
+			// Parse HDMI2 resolution
+			const char *hdmi2_str = getenv("IMPRESSBOX_DM_HDMI2");
+			if (hdmi2_str) {
+				if (parse_resolution(hdmi2_str, &server->extended_resolution.hdmi2_width,
+				                     &server->extended_resolution.hdmi2_height) == 0) {
+					server->extended_resolution.hdmi2_configured = true;
+					wlr_log(WLR_INFO, "EXTENDED: HDMI2 resolution set to %dx%d",
+					        server->extended_resolution.hdmi2_width,
+					        server->extended_resolution.hdmi2_height);
+				} else {
+					wlr_log(WLR_ERROR, "EXTENDED: Invalid IMPRESSBOX_DM_HDMI2 format '%s', will use preferred mode", hdmi2_str);
+					server->extended_resolution.hdmi2_configured = false;
+				}
+			} else {
+				server->extended_resolution.hdmi2_configured = false;
+				wlr_log(WLR_INFO, "EXTENDED: IMPRESSBOX_DM_HDMI2 not set, will use preferred mode");
+			}
+
+			resolution_parsed = true;
+		}
+
+		// Determine resolution for this output
+		int output_width, output_height;
+		if (is_hdma1) {
+			if (server->extended_resolution.hdmi1_configured) {
+				output_width = server->extended_resolution.hdmi1_width;
+				output_height = server->extended_resolution.hdmi1_height;
+			} else {
+				// Use preferred mode
+				struct wlr_output_mode *preferred = wlr_output_preferred_mode(wlr_output);
+				if (preferred) {
+					output_width = preferred->width;
+					output_height = preferred->height;
+					// Store for later use
+					server->extended_resolution.hdmi1_width = output_width;
+					server->extended_resolution.hdmi1_height = output_height;
+					wlr_log(WLR_INFO, "EXTENDED: HDMI1 using preferred mode %dx%d",
+					        output_width, output_height);
+				} else {
+					wlr_log(WLR_ERROR, "EXTENDED: No preferred mode available for %s", name);
+			wlr_output_enable(wlr_output, false);
+			wlr_output_commit(wlr_output);
+			return;
+		}
+			}
+		} else {  // HDMI2
+			if (server->extended_resolution.hdmi2_configured) {
+				output_width = server->extended_resolution.hdmi2_width;
+				output_height = server->extended_resolution.hdmi2_height;
+			} else {
+				// Use preferred mode
+				struct wlr_output_mode *preferred = wlr_output_preferred_mode(wlr_output);
+				if (preferred) {
+					output_width = preferred->width;
+					output_height = preferred->height;
+					// Store for later use
+					server->extended_resolution.hdmi2_width = output_width;
+					server->extended_resolution.hdmi2_height = output_height;
+					wlr_log(WLR_INFO, "EXTENDED: HDMI2 using preferred mode %dx%d",
+					        output_width, output_height);
+				} else {
+					wlr_log(WLR_ERROR, "EXTENDED: No preferred mode available for %s", name);
+					wlr_output_enable(wlr_output, false);
+					wlr_output_commit(wlr_output);
+					return;
+				}
+			}
+		}
+	
+		// Set output mode
+		if (output_set_mode(wlr_output, output_width, output_height,
+		                    server->extended_resolution.refresh_rate) != 0) {
+			wlr_log(WLR_ERROR, "EXTENDED: failed to set mode %dx%d@%.2fHz for %s",
+			        output_width, output_height,
+			        server->extended_resolution.refresh_rate, name);
+			wlr_output_enable(wlr_output, false);
+			wlr_output_commit(wlr_output);
+			return;
+		}
+		
+	
+		static int next_x = 0;  // For horizontal: first at x=0, second at x=1680
+		static int next_y = 0; // first output at y=0, second at y=1050
+	
+		struct cg_output *output = calloc(1, sizeof(struct cg_output));
+		if (!output) {
+			wlr_log(WLR_ERROR, "EXTENDED: failed to allocate output");
+			return;
+		}
+
+		output->server = server;
+		output->wlr_output = wlr_output;
+		output->name = strdup(name);
+		output->destroyed = false;
+		//output->workspaces = NULL; // we’ll handle workspaces later
+		wl_list_init(&output->messages);
+	
+		output->scene_output = wlr_scene_output_create(server->scene, wlr_output);
+
+		if (!output->scene_output) {
+			wlr_log(WLR_ERROR, "EXTENDED: failed to create scene output");
+			free(output->name);
+			free(output);
+			return;
+		}
+
+		// Create the global wall scene once (shared by both outputs)
+		if (!server->extended_wall_scene) {
+			server->extended_wall_scene = wlr_scene_tree_create(&server->scene->tree);
+			if (!server->extended_wall_scene) {
+				wlr_log(WLR_ERROR, "EXTENDED: failed to create wall scene");
+				return;
+			}
+			wlr_log(WLR_DEBUG, "EXTENDED: created global wall scene for spanning views");
+		}
+
+		// Calculate wall dimensions based on configured resolutions
+		// Only create/update wall background when we have both resolutions
+		static struct wlr_scene_rect *wall_bg = NULL;
+		if (server->extended_resolution.hdmi1_width > 0 && server->extended_resolution.hdmi1_height > 0 &&
+		    server->extended_resolution.hdmi2_width > 0 && server->extended_resolution.hdmi2_height > 0) {
+			int wall_width, wall_height;
+			if (server->extended_horizontal) {
+				// Horizontal: outputs side-by-side
+				wall_width = server->extended_resolution.hdmi1_width + server->extended_resolution.hdmi2_width;
+				// Use maximum height (in case they differ)
+				wall_height = server->extended_resolution.hdmi1_height > server->extended_resolution.hdmi2_height ?
+				              server->extended_resolution.hdmi1_height : server->extended_resolution.hdmi2_height;
+			} else {
+				// Vertical: outputs stacked
+				// Use maximum width (in case they differ)
+				wall_width = server->extended_resolution.hdmi1_width > server->extended_resolution.hdmi2_width ?
+				             server->extended_resolution.hdmi1_width : server->extended_resolution.hdmi2_width;
+				wall_height = server->extended_resolution.hdmi1_height + server->extended_resolution.hdmi2_height;
+			}
+
+			// Create or update wall background (destroy old one if exists)
+			if (wall_bg) {
+				wlr_scene_node_destroy(&wall_bg->node);
+			}
+			wall_bg = wlr_scene_rect_create(
+				&server->scene->tree,
+				wall_width, wall_height,
+				server->bg_color);
+			if (wall_bg) {
+			wlr_scene_node_set_position(&wall_bg->node, 0, 0);
+			wlr_scene_node_lower_to_bottom(&wall_bg->node);
+				wlr_log(WLR_DEBUG, "EXTENDED: wall background %dx%d", wall_width, wall_height);
+			}
+		}
+		
+		// Reset positioning counters for this output setup
+		// Reset positioning counters when mode changes
+		static bool last_horizontal = false;
+		static bool first_call = true;
+
+		if (first_call || (last_horizontal != server->extended_horizontal)) {
+			next_x = 0;
+			next_y = 0;
+			last_horizontal = server->extended_horizontal;
+			first_call = false;
+		}
+
+		int pos_x, pos_y;
+		if (server->extended_horizontal) {
+			pos_x = next_x;
+			pos_y = 0;
+			wlr_log(WLR_DEBUG, "EXTENDED: %s positioning - next_x=%d, output_width=%d, pos_x=%d", 
+			        name, next_x, output_width, pos_x);
+			next_x += output_width;  // Increment by current output's width
+		} else {
+			pos_x = 0;
+			pos_y = next_y;
+			wlr_log(WLR_DEBUG, "EXTENDED: %s positioning - next_y=%d, output_height=%d, pos_y=%d", 
+			        name, next_y, output_height, pos_y);
+			next_y += output_height;  // Increment by current output's height
+		}
+
+		wlr_log(WLR_DEBUG, "EXTENDED: %s calling wlr_output_layout_add with pos_x=%d, pos_y=%d", 
+		        name, pos_x, pos_y);
+		struct wlr_output_layout_output *lo =
+			wlr_output_layout_add(server->output_layout, wlr_output, pos_x, pos_y);
+	
+		wlr_scene_output_layout_add_output(server->scene_output_layout, lo,
+										   output->scene_output);
+		wlr_output_layout_get_box(server->output_layout, output->wlr_output,
+								  &output->layout_box);
+	
+		output_insert(server, output);
+		if (server->curr_output == NULL) {
+			server->curr_output = output;
+		}
+	
+		output->destroy.notify = handle_output_destroy;
+		wl_signal_add(&wlr_output->events.destroy, &output->destroy);
+		output->frame.notify = handle_output_frame;
+		wl_signal_add(&wlr_output->events.frame, &output->frame);
+		output->commit.notify = handle_output_commit;
+		wl_signal_add(&wlr_output->events.commit, &output->commit);
+	
+		wlr_output_enable(wlr_output, true);
+		wlr_output_commit(wlr_output);
+	
+		wlr_log(WLR_DEBUG, "EXTENDED: %s placed at (%d,%d)", name,
+				output->layout_box.x, output->layout_box.y);
+
+		output->bg = wlr_scene_rect_create(
+			&server->scene->tree,
+			1, 1,  // Tiny 1x1 pixel rect, won't be visible
+			server->bg_color);
+
+		wlr_scene_node_set_position(&output->bg->node, 0, 0);
+		wlr_scene_node_lower_to_bottom(&output->bg->node);
+
+		output->workspaces =
+		malloc(server->nws * sizeof(struct cg_workspace *));
+		if (!output->workspaces) {
+			wlr_log(WLR_ERROR, "EXTENDED: failed to allocate workspaces");
+			return;
+		}
+
+		for (unsigned int i = 0; i < server->nws; ++i) {
+			output->workspaces[i] = full_screen_workspace(output);
+			if (!output->workspaces[i]) {
+				wlr_log(WLR_ERROR, "EXTENDED: failed to create workspace %u", i);
+				continue;
+			}
+			output->workspaces[i]->num = i;
+			wl_list_init(&output->workspaces[i]->views);
+			wl_list_init(&output->workspaces[i]->unmanaged_views);
+		}
+
+		// Focus the first workspace
+		workspace_focus(output, 0);
+		
+		return;
+	} else {
+    	wlr_log(WLR_INFO, "EXTENDED MODE = FALSE");
 	}
 
 	struct cg_output *ito;

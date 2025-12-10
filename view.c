@@ -5,12 +5,14 @@
 
 #include <stdbool.h>
 #include <string.h>
+#include <strings.h>
 #include <wayland-server-core.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/util/box.h>
+#include <wlr/util/log.h>
 
 #include "ipc_server.h"
 #include "output.h"
@@ -78,6 +80,8 @@ view_activate(struct cg_view *view, bool activate) {
 
 void
 view_maximize(struct cg_view *view, struct cg_tile *tile) {
+	wlr_log(WLR_DEBUG, "EXTENDED: view_maximize (normal) called - view=%p, tile=%dx%d",
+		view, tile ? tile->tile.width : -1, tile ? tile->tile.height : -1);
 	view->ox = tile->tile.x;
 	view->oy = tile->tile.y;
 	wlr_scene_node_set_position(
@@ -87,6 +91,72 @@ view_maximize(struct cg_view *view, struct cg_tile *tile) {
 	view->impl->maximize(view, tile->tile.width, tile->tile.height);
 	view->tile = tile;
 	wlr_scene_node_raise_to_top(&view->scene_tree->node);
+}
+
+void
+view_maximize_extended(struct cg_view *view, struct cg_tile *tile) {
+    struct cg_output *output = view->workspace->output;
+    struct cg_server *server = output->server;
+
+    bool is_hdma1 = output &&
+        (output->name &&
+         (strcasecmp(output->name, "HDMA1") == 0 ||
+          strcasecmp(output->name, "HDMI-A-1") == 0));
+
+    wlr_log(WLR_DEBUG, "EXTENDED: view_maximize_extended called - view=%p, output=%s, extended_mode=%d, is_hdma1=%d",
+        view, output ? output->name : "NULL", server->extended_mode, is_hdma1);
+
+    if(!server->extended_mode || !is_hdma1) {
+        view_maximize(view, tile);
+        return;
+    }
+
+    // For extended mode, maximize to full wall dimensions
+    // Safety check: ensure wall scene exists
+    if (!server->extended_wall_scene) {
+        wlr_log(WLR_ERROR, "EXTENDED: extended_wall_scene is NULL, falling back to normal maximize");
+        view_maximize(view, tile);
+        return;
+    }
+    
+    view->ox = 0;
+    view->oy = 0;
+    
+    wlr_log(WLR_DEBUG, "EXTENDED: About to maximize - tile=%dx%d, current parent=%p, wall_scene=%p",
+        tile ? tile->tile.width : -1, tile ? tile->tile.height : -1,
+        view->scene_tree ? view->scene_tree->node.parent : NULL, server->extended_wall_scene);
+    
+	if (view->scene_tree && view->scene_tree->node.parent == server->extended_wall_scene) {
+		// Already in wall scene - position at (0,0) relative to wall scene
+		wlr_log(WLR_DEBUG, "EXTENDED: View already in wall scene, positioning at (0,0)");
+		wlr_scene_node_set_position(&view->scene_tree->node, 0, 0);
+	} else {
+		// Not yet in wall scene - reparent it first
+		wlr_log(WLR_DEBUG, "EXTENDED: Reparenting view to wall scene");
+		wlr_scene_node_reparent(&view->scene_tree->node, server->extended_wall_scene);
+		wlr_scene_node_set_position(&view->scene_tree->node, 0, 0);
+		// Ensure wall scene is on top
+		wlr_scene_node_raise_to_top(&server->extended_wall_scene->node);
+	}
+    
+	int wall_width, wall_height;
+	if (server->extended_horizontal) {
+		// Horizontal: outputs side-by-side
+		wall_width = server->extended_resolution.hdmi1_width + server->extended_resolution.hdmi2_width;
+		// Use maximum height (in case they differ)
+		wall_height = server->extended_resolution.hdmi1_height > server->extended_resolution.hdmi2_height ?
+		              server->extended_resolution.hdmi1_height : server->extended_resolution.hdmi2_height;
+	} else {
+		// Vertical: outputs stacked
+		// Use maximum width (in case they differ)
+		wall_width = server->extended_resolution.hdmi1_width > server->extended_resolution.hdmi2_width ?
+		             server->extended_resolution.hdmi1_width : server->extended_resolution.hdmi2_width;
+		wall_height = server->extended_resolution.hdmi1_height + server->extended_resolution.hdmi2_height;
+	}
+	view->impl->maximize(view, wall_width, wall_height);
+
+    view->tile = tile;
+    wlr_scene_node_raise_to_top(&view->scene_tree->node);
 }
 
 void
@@ -192,6 +262,7 @@ view_map(struct cg_view *view, struct wlr_surface *surface,
 	    view->id, tile_id, view->workspace->num + 1,
 	    view->workspace->output->name, output_get_num(view->workspace->output),
 	    view->impl->get_pid(view));
+
 }
 
 void

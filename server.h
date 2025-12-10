@@ -46,6 +46,7 @@ struct cg_server {
 	struct wlr_renderer *renderer;
 	struct wlr_allocator *allocator;
 	struct wlr_scene *scene;
+	struct wlr_scene_tree *extended_wall_scene;
 
 	struct wl_listener xdg_toplevel_decoration;
 	struct wl_listener new_xdg_shell_surface;
@@ -63,7 +64,18 @@ struct cg_server {
 
 	bool enable_socket;
 	bool bs;
+	bool extended_mode;
+	bool extended_horizontal;
 	bool running;
+	struct {
+		int hdmi1_width;
+		int hdmi1_height;
+		int hdmi2_width;
+		int hdmi2_height;
+		float refresh_rate;  // Default 60.0
+		bool hdmi1_configured;  // Track if env var was provided
+		bool hdmi2_configured;
+	} extended_resolution;
 	char **modes;
 	uint16_t nws;
 	float *bg_color;
