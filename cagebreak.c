@@ -55,6 +55,7 @@
 #include "parse.h"
 #include "seat.h"
 #include "server.h"
+#include "output_management.h"
 #include "workspace.h"
 #include "xdg_shell.h"
 #if CG_HAS_XWAYLAND
@@ -557,6 +558,8 @@ main(int argc, char *argv[]) {
 		ret = 1;
 		goto end;
 	}
+
+	output_management_init(&server);
 
 	if(!wlr_primary_selection_v1_device_manager_create(server.wl_display)) {
 		wlr_log(WLR_ERROR,

@@ -40,6 +40,10 @@ struct cg_server {
 	struct cg_output *curr_output;
 	struct wl_listener new_output;
 	struct wl_list output_priorities;
+	struct wlr_output_manager_v1 *output_manager_v1;
+	struct wl_listener output_manager_apply;
+	struct wl_listener output_manager_test;
+	struct wl_listener output_layout_change;
 	struct wlr_backend *headless_backend;
 	struct wlr_session *session;
 
